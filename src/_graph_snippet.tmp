@@ -1,0 +1,16 @@
+    if (buildGraph) {
+        let graphml = `<?xml version="1.0" encoding="UTF-8"?>\n<graphml>\n  <graph id="G" edgedefault="directed">\n`;
+        Array.from(graphNodes.entries()).forEach(([id, weight]) => {
+            const safeId = esc(id);
+            graphml += `    <node id="${safeId}"><data key="name">${safeId}</data><data key="messages">${weight}</data></node>\n`;
+        });
+        Array.from(graphLinks.values()).forEach(link => {
+            const s = esc(link.source), t = esc(link.target);
+            graphml += `    <edge source="${s}" target="${t}"><data key="weight">${link.value}</data><data key="label">Ответы</data></edge>\n`;
+        });
+        graphml += `  </graph>\n</graphml>`;
+
+        fs.writeFileSync(path.join(exportDir, 'latest_graph.xml'), graphml);
+        zip.addFile(`graph_data.xml`, Buffer.from(graphml, 'utf8'));
+        progressCallback({ log: `[СИСТЕМА] Граф связей (Узлов: ${graphNodes.size}, Связей: ${graphLinks.size}) построен.` });
+    }
