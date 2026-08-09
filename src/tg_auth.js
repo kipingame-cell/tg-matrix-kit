@@ -4,6 +4,7 @@
  * Доставка кода логируется: тип виден в ответе API и в логе (APP / SMS / CALL / FLASH_CALL).
  * Повторная отправка кода: POST /resend-code (переключает канал: приложение → SMS → звонок).
  * Подключение: direct → Tor фолбэк (USE_TOR=0 отключает, FORCE_TOR=1 — только Tor).
+ * По завершении выгрузки — пуш с ZIP-архивом через бота (TG_BOT_TOKEN/TG_CHAT_ID в .env).
  */
 
 const express = require('express');
@@ -336,6 +337,7 @@ router.post('/export/start', async (req, res) => {
     };
 
     const { exportChatMessages } = require('./telegram_core');
+    const { notifyExportDone, notifyExportError } = require('./bot_notify');
 
     exportChatMessages(client, req.body.id, req.body, task, (progress) => {
         broadcast({ type: 'monitor_update', ...progress });
@@ -343,9 +345,11 @@ router.post('/export/start', async (req, res) => {
         task.status = 'done'; task.result = result;
         broadcast({ type: 'archive_ready', downloadUrl: `/api/tg/download-extra?file=${result.zip}`, extras: result });
         broadcast({ type: 'done' });
+        notifyExportDone(result, req.body).catch(e => console.error('[PUSH]', e.message));
     }).catch(err => {
         task.status = 'error';
         broadcast({ type: 'error', msg: fmtErr(err) });
+        notifyExportError(err, req.body).catch(() => {});
     });
 
     res.json({ success: true });
