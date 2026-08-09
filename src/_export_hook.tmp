@@ -1,0 +1,18 @@
+    const { exportChatMessages } = require('./telegram_core');
+    const { notifyExportDone, notifyExportError } = require('./bot_notify');
+
+    exportChatMessages(client, req.body.id, req.body, task, (progress) => {
+        broadcast({ type: 'monitor_update', ...progress });
+    }).then(result => {
+        task.status = 'done'; task.result = result;
+        broadcast({ type: 'archive_ready', downloadUrl: `/api/tg/download-extra?file=${result.zip}`, extras: result });
+        broadcast({ type: 'done' });
+        notifyExportDone(result, req.body).catch(() => {});
+    }).catch(err => {
+        task.status = 'error';
+        broadcast({ type: 'error', msg: fmtErr(err) });
+        notifyExportError(err, req.body).catch(() => {});
+    });
+
+    res.json({ success: true });
+});
