@@ -7,7 +7,7 @@
         task.status = 'done'; task.result = result;
         broadcast({ type: 'archive_ready', downloadUrl: `/api/tg/download-extra?file=${result.zip}`, extras: result });
         broadcast({ type: 'done' });
-        notifyExportDone(result, req.body).catch(() => {});
+        notifyExportDone(result, req.body).catch(e => console.error('[PUSH]', e.message));
     }).catch(err => {
         task.status = 'error';
         broadcast({ type: 'error', msg: fmtErr(err) });
