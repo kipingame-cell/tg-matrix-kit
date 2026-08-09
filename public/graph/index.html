@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>КИБЕР-СЕТЬ // ОБЪЕКТ 3826</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { margin: 0; background: #050505; color: #f4e8d3; font-family: monospace; overflow: hidden; }
+        #canvas { width: 100vw; height: 100vh; }
+        .ui-panel { position: absolute; top: 20px; right: 20px; width: 260px; background: rgba(15,15,20,0.95); border: 2px solid #5a5a5f; padding: 15px; border-top: 4px solid #cc0000; box-shadow: 0 0 20px rgba(204,0,0,0.3); z-index: 10; }
+        .stat-row { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 5px; border-bottom: 1px dashed #333; }
+        .stat-val { color: #00ffff; text-align: right; }
+        .node { stroke: #cc0000; stroke-width: 2px; cursor: pointer; transition: stroke-width 0.2s; }
+        .node:hover { stroke: #00ffff; stroke-width: 4px; }
+        .link { stroke: #5a5a5f; stroke-opacity: 0.5; cursor: pointer; transition: stroke 0.2s; }
+        .link:hover { stroke: #00ffff; stroke-opacity: 1; }
+        .label { font-size: 10px; fill: #aaa; pointer-events: none; text-shadow: 1px 1px 1px #000; }
+        .nav-btn { position: absolute; top: 20px; left: 20px; background: #cc0000; color: #fff; padding: 10px; text-decoration: none; font-weight: bold; z-index: 100; border: 2px solid #5a5a5f; }
+    </style>
+</head>
+<body>
+    <a href="/tg/" class="nav-btn">[ НАЗАД В ТЕРМИНАЛ ]</a>
+    <div class="ui-panel">
+        <h3 style="color:#cc0000; margin:0 0 10px 0; font-size:14px;">ИНФО-ПАНЕЛЬ</h3>
+        <div id="general-stats">
+            <div class="stat-row"><span>ОБЪЕКТОВ:</span> <span id="st-n" class="stat-val">0</span></div>
+            <div class="stat-row"><span>СВЯЗЕЙ:</span> <span id="st-e" class="stat-val">0</span></div>
+        </div>
+        <div id="details" style="margin-top:15px; display:none; border-top: 2px solid #cc0000; padding-top: 10px;">
+            <h4 id="det-title" style="color:#00ffff; margin:0 0 5px 0;">-</h4>
+            <div class="stat-row"><span>СТАТУС:</span> <span id="det-sub" class="stat-val">0</span></div>
+            <div class="stat-row"><span>ДЕТАЛИ:</span> <span id="det-desc" class="stat-val">0</span></div>
+        </div>
+    </div>
+    <div id="canvas"></div>
+
+    <script>
+        const file = new URLSearchParams(window.location.search).get('file');
+        async function run() {
+            if(!file) return alert("ФАЙЛ НЕ ВЫБРАН");
+            const res = await fetch(file);
+            const xml = await res.text();
+            const doc = new DOMParser().parseFromString(xml, "text/xml");
+
+            const nodes = [], nodeMap = new Map();
+            doc.querySelectorAll('node').forEach(n => {
+                let id = n.getAttribute('id');
+                let name = id;
+                n.querySelectorAll('data').forEach(d => { if(d.getAttribute('key')==='name') name=d.textContent; });
+                const o = { id, name, weight: 0 };
+                nodes.push(o); nodeMap.set(id, o);
+            });
+
+            const links = [];
+            doc.querySelectorAll('edge').forEach(e => {
+                const s = e.getAttribute('source'), t = e.getAttribute('target');
+                let weight = 1, label = "Общение";
+                e.querySelectorAll('data').forEach(d => {
+                    if(d.getAttribute('key')==='weight') weight = parseFloat(d.textContent);
+                    if(d.getAttribute('key')==='label') label = d.textContent;
+                });
+                if(nodeMap.has(s) && nodeMap.has(t)) {
+                    nodeMap.get(s).weight += weight; nodeMap.get(t).weight += weight;
+                    links.push({ source: s, target: t, weight, label });
+                }
+            });
+
+            document.getElementById('st-n').innerText = nodes.length;
+            document.getElementById('st-e').innerText = links.length;
+
+            const svg = d3.select("#canvas").append("svg").attr("width","100%").attr("height","100%");
+            const g = svg.append("g");
+            svg.call(d3.zoom().on("zoom", (e) => g.attr("transform", e.transform)));
+
+            const sim = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d => d.id).distance(150))
+                .force("charge", d3.forceManyBody().strength(-500))
+                .force("center", d3.forceCenter(window.innerWidth/2, window.innerHeight/2));
+
+            const showInfo = (title, sub, desc) => {
+                document.getElementById("details").style.display = "block";
+                document.getElementById("det-title").innerText = title;
+                document.getElementById("det-sub").innerText = sub;
+                document.getElementById("det-desc").innerText = desc;
+            };
+
+            const link = g.selectAll(".link").data(links).enter().append("line")
+                .attr("class","link").attr("stroke-width", d => Math.min(6, 1 + d.weight))
+                .on("click", (e, d) => showInfo(`${d.source.name} ↔ ${d.target.name}`, `Интенсивность: ${d.weight}`, `Тема: ${d.label}`));
+
+            const node = g.selectAll(".node").data(nodes).enter().append("circle")
+                .attr("class","node").attr("r", d => Math.min(30, 8 + d.weight))
+                .attr("fill", "#141417")
+                .on("click", (e, d) => showInfo(`ОБЪЕКТ: ${d.name}`, "В разработке", `Индекс влияния: ${d.weight}`))
+                .call(d3.drag().on("start", (e,d) => { if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
+                .on("drag", (e,d) => { d.fx=e.x; d.fy=e.y; })
+                .on("end", (e,d) => { if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }));
+
+            const labels = g.selectAll(".label").data(nodes).enter().append("text")
+                .attr("class","label").attr("dy", d => Math.min(30, 8 + d.weight) + 12)
+                .attr("text-anchor","middle").text(d => d.name);
+
+            sim.on("tick", () => {
+                link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+                node.attr("cx", d => d.x).attr("cy", d => d.y);
+                labels.attr("x", d => d.x).attr("y", d => d.y);
+            });
+        }
+        run();
+    </script>
+</body>
+</html>
