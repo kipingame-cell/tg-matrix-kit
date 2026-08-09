@@ -1,0 +1,9 @@
+node_modules/
+.env
+exports/
+tg_sessions/
+*.session
+*.session-journal
+tg_backup/tmp/
+tg_backup/venv/
+__pycache__/

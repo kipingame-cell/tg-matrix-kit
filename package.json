@@ -1,0 +1,22 @@
+{
+  "name": "tg-matrix-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check src/tg_auth.js && node --check src/tg_export.js && node --check src/telegram_core.js && node --check src/ai_engine.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.2",
+    "node-fetch": "^2.7.0",
+    "socks-proxy-agent": "^7.0.0",
+    "telegram": "^2.26.22"
+  }
+}
