@@ -42,6 +42,7 @@
         .monitor-logs { height: 150px; overflow-y: auto; font-size: 11px; color: #888; border-top: 1px solid #1a1a1a; padding-top: 10px; }
         .hidden { display: none !important; }
         .small-muted { font-size: 9px; color: var(--at-steel); display: block; margin-bottom: 5px; }
+        #btn_rescan { width: auto; padding: 10px 14px; margin-top: 0; font-size: 11px; background: #222; color: var(--at-cream); border: 1px solid var(--at-steel); border-bottom-width: 3px; }
     </style>
 </head>
 <body>
@@ -66,12 +67,13 @@
         <button class="danger-btn" style="padding:4px; font-size:9px;" id="btn_logout_control">ВЫХОД</button>
         <label>ЦЕЛЬ СКАНИРОВАНИЯ:</label>
         <div class="panel-subtle" style="padding: 10px; border-color: #333; margin-bottom: 10px;">
-            <div class="grid-2" style="margin-bottom: 8px;">
-                <input type="text" id="chat_search" placeholder="ПОИСК ПО БАЗЕ..." style="font-size: 11px;">
-                <select id="chat_sort" style="font-size: 11px;">
-                    <option value="az">СОРТИРОВКА: А - Я</option>
-                    <option value="za">СОРТИРОВКА: Я - А</option>
+            <div style="display:flex; gap:8px; margin-bottom: 8px;">
+                <input type="text" id="chat_search" placeholder="ПОИСК ПО БАЗЕ..." style="font-size: 11px; flex:1;">
+                <select id="chat_sort" style="font-size: 11px; width:130px;">
+                    <option value="az">СОРТ: А - Я</option>
+                    <option value="za">СОРТ: Я - А</option>
                 </select>
+                <button id="btn_rescan" type="button" title="ОБНОВИТЬ БАЗУ">⟳</button>
             </div>
             <div id="chat_list" style="max-height: 180px; overflow-y: auto; background: #050505; border: 1px inset #222;">
                 <div style="color: #5a5a5f; font-size: 10px; text-align: center; padding: 15px;">ЗАГРУЗКА СПИСКА...</div>

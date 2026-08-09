@@ -4,6 +4,14 @@ let allChats = [];
 
 const getEl = (id) => document.getElementById(id);
 
+// --- КЭШ СОСТОЯНИЯ ТЕРМИНАЛА: держим список чатов, выбранный чат,
+// --- результаты последней выгрузки и настройки формы между переходами
+// --- на граф/радар и обратно. Сбрасывается только при релогине.
+const cacheKey = (k) => `tgk_${sid}_${k}`;
+const loadCache = (k) => { try { return JSON.parse(localStorage.getItem(cacheKey(k))); } catch (e) { return null; } };
+const saveCacheData = (k, v) => { try { localStorage.setItem(cacheKey(k), JSON.stringify(v)); } catch (e) {} };
+const clearAllCache = () => ['chats', 'sel', 'lastres', 'form'].forEach(k => localStorage.removeItem(cacheKey(k)));
+
 async function apiCall(path, method = 'GET', data = null) {
     try {
         const res = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: data ? JSON.stringify(data) : null });
@@ -115,6 +123,15 @@ if (getEl('connect_btn')) {
     };
 }
 
+// Показ кнопок результатов выгрузки + запоминание (чтобы пережить уход на граф/радар)
+function showResultButtons(r) {
+    if (r.downloadUrl) { const btn = getEl('download_btn'); if (btn) { btn.classList.remove('hidden'); btn.onclick = () => window.location.href = r.downloadUrl; } }
+    if (r.graph) { const gb = getEl('view_graph_btn'); if (gb) { gb.classList.remove('hidden'); gb.onclick = () => window.location.href = `/graph/?file=${encodeURIComponent(r.graph)}`; } }
+    if (r.heatmap) { const hb = getEl('view_heatmap_btn'); if (hb) { hb.classList.remove('hidden'); hb.onclick = () => window.location.href = `/heatmap/?file=${encodeURIComponent(r.heatmap)}`; } }
+    if (r.dossier) { const db = getEl('download_ai_btn'); if (db) { db.innerText = "ОТКРЫТЬ ДОСЬЕ"; db.classList.remove('hidden'); db.onclick = () => window.location.href = r.dossier; } }
+    saveCacheData('lastres', r);
+}
+
 function connectStream() {
     if (window.exportEs) window.exportEs.close();
     window.exportEs = new EventSource(`/api/tg/export/stream?sid=${sid}`);
@@ -132,11 +149,7 @@ function connectStream() {
             if (d.percent !== undefined && getEl('mon_progress')) getEl('mon_progress').style.width = `${d.percent}%`;
         }
         if (d.type === 'archive_ready') {
-            const btn = getEl('download_btn');
-            if (btn) { btn.classList.remove('hidden'); btn.onclick = () => window.location.href = d.downloadUrl; }
-            if (d.extras?.graph) { const gb = getEl('view_graph_btn'); if (gb) { gb.classList.remove('hidden'); gb.onclick = () => window.location.href = `/graph/?file=${encodeURIComponent(d.extras.graph)}`; } }
-            if (d.extras?.heatmap) { const hb = getEl('view_heatmap_btn'); if (hb) { hb.classList.remove('hidden'); hb.onclick = () => window.location.href = `/heatmap/?file=${encodeURIComponent(d.extras.heatmap)}`; } }
-            if (d.extras?.dossier) { const db = getEl('download_ai_btn'); if (db) { db.innerText = "ОТКРЫТЬ ДОСЬЕ"; db.classList.remove('hidden'); db.onclick = () => window.location.href = d.extras.dossier; } }
+            showResultButtons({ downloadUrl: d.downloadUrl, graph: d.extras?.graph, heatmap: d.extras?.heatmap, dossier: d.extras?.dossier });
         }
         if (d.type === 'done' || d.type === 'error') {
             if (d.type === 'error' && getEl('mon_logs')) { const div = document.createElement('div'); div.textContent = `[${new Date().toLocaleTimeString()}] > ОШИБКА: ${d.msg}`; div.style.color = '#cc0000'; getEl('mon_logs').appendChild(div); }
@@ -145,14 +158,49 @@ function connectStream() {
     };
 }
 
+// Сканирование базы чатов (ручное или при первом входе)
+async function scanChats(silent = false) {
+    const list = getEl('chat_list');
+    if (!silent && list) list.innerHTML = '<div style="color: #aaa; font-size: 10px; text-align: center; padding: 15px;">СКАНИРОВАНИЕ СЕТИ...</div>';
+    const data = await apiCall(`/api/tg/chats?sid=${sid}`);
+    if (data && data.success && data.chats) {
+        allChats = data.chats;
+        window.renderChats();
+        saveCacheData('chats', allChats);
+        // Восстановить выделение после перерисовки
+        const sel = loadCache('sel');
+        if (sel && sel.id) {
+            const item = getEl('chat-item-' + sel.id);
+            if (item) { item.style.background = '#1a1a24'; item.style.borderLeft = '3px solid #cc0000'; }
+        }
+        return true;
+    }
+    if (!silent && list) list.innerHTML = '<div style="color: #c00; font-size: 10px; text-align: center; padding: 15px;">ОШИБКА БАЗЫ. НУЖЕН РЕЛОГИН.</div>';
+    return false;
+}
+
+// Восстановление настроек формы выгрузки
+function restoreForm() {
+    const f = loadCache('form');
+    if (!f) return;
+    const set = (id, v) => { const el = getEl(id); if (el && v !== undefined && v !== null) el.value = v; };
+    const setChk = (id, v) => { const el = getEl(id); if (el && v !== undefined) el.checked = !!v; };
+    set('keywords', f.keywords); set('limit', f.limit); set('exportMode', f.exportMode);
+    set('dateFrom', f.dateFromRaw); set('dateTo', f.dateToRaw);
+    setChk('buildGraph', f.buildGraph); setChk('buildDossier', f.buildDossier);
+    setChk('buildHeatmap', f.buildHeatmap); setChk('downloadMedia', f.downloadMedia);
+}
+
 window.initControl = async () => {
     getEl('web_login_frame')?.classList.add('hidden');
     getEl('auth_frame')?.classList.add('hidden');
     getEl('control_frame')?.classList.remove('hidden'); loadKeys();
+    restoreForm();
 
     if (getEl('btn_toggle_keys_panel')) getEl('btn_toggle_keys_panel').onclick = () => getEl('keys_panel').classList.toggle('hidden');
     if (getEl('btn_add_dynamic_key')) getEl('btn_add_dynamic_key').onclick = () => { smartKeys.push({type:'gemini', val:''}); renderKeys(); saveKeys(); };
-    if (getEl('btn_logout_control')) getEl('btn_logout_control').onclick = () => { localStorage.removeItem('tg_sid'); location.reload(); };
+    if (getEl('btn_logout_control')) getEl('btn_logout_control').onclick = () => { clearAllCache(); localStorage.removeItem('tg_sid'); location.reload(); };
+    if (getEl('btn_rescan')) getEl('btn_rescan').onclick = () => scanChats(false);
 
     const taskStatus = await apiCall(`/api/tg/export/status?sid=${sid}`);
     if (taskStatus && taskStatus.active) {
@@ -160,18 +208,35 @@ window.initControl = async () => {
         getEl('export_btn')?.classList.add('hidden');
         getEl('stop_btn')?.classList.remove('hidden');
         connectStream();
+    } else {
+        // Выгрузка не идёт — вернуть кнопки результатов прошлого запуска
+        const lastRes = loadCache('lastres');
+        if (lastRes) showResultButtons(lastRes);
     }
 
-    const list = getEl('chat_list');
-    if (list) list.innerHTML = '<div style="color: #aaa; font-size: 10px; text-align: center; padding: 15px;">СКАНИРОВАНИЕ СЕТИ...</div>';
-
-    const data = await apiCall(`/api/tg/chats?sid=${sid}`);
-    if (data && data.success && data.chats) { allChats = data.chats; window.renderChats(); }
-    else if (list) list.innerHTML = '<div style="color: #c00; font-size: 10px; text-align: center; padding: 15px;">ОШИБКА БАЗЫ. НУЖЕН РЕЛОГИН.</div>';
+    // База чатов: сначала мгновенно из кэша, потом тихое обновление в фоне
+    const cachedChats = loadCache('chats');
+    if (cachedChats && cachedChats.length) {
+        allChats = cachedChats;
+        window.renderChats();
+        // Восстановить выбранный объект (подтянет ветки и участников)
+        const sel = loadCache('sel');
+        if (sel && sel.id && sel.name) {
+            getEl('dialogs_dropdown').value = sel.id;
+            getEl('selected_chat_display').innerText = 'ВЫБРАН: ' + sel.name;
+            const item = getEl('chat-item-' + sel.id);
+            if (item) { item.style.background = '#1a1a24'; item.style.borderLeft = '3px solid #cc0000'; }
+            window.selectChat(sel.id, sel.name);
+        }
+        scanChats(true); // фоновое обновление без мигания
+    } else {
+        await scanChats(false);
+    }
 };
 
 window.selectChat = (id, name) => {
     getEl('dialogs_dropdown').value = id; getEl('selected_chat_display').innerText = 'ВЫБРАН: ' + name;
+    saveCacheData('sel', { id, name });
     document.querySelectorAll('.chat-item').forEach(el => { el.style.background = 'transparent'; el.style.borderLeft = '3px solid transparent'; });
     const active = getEl('chat-item-' + id); if(active) { active.style.background = '#1a1a24'; active.style.borderLeft = '3px solid #cc0000'; }
 
@@ -228,6 +293,7 @@ if (getEl('export_btn')) {
         getEl('cyber_monitor')?.classList.remove('hidden'); getEl('export_btn')?.classList.add('hidden'); getEl('stop_btn')?.classList.remove('hidden');
         if(getEl('mon_logs')) getEl('mon_logs').innerHTML = '';
         ['download_btn', 'view_graph_btn', 'view_heatmap_btn', 'download_ai_btn'].forEach(id => { const btn = getEl(id); if (btn) btn.classList.add('hidden'); });
+        localStorage.removeItem(cacheKey('lastres'));
 
         const df = getEl('dateFrom')?.value, dt = getEl('dateTo')?.value, limValue = getEl('limit')?.value.trim();
         const params = {
@@ -238,6 +304,14 @@ if (getEl('export_btn')) {
             buildHeatmap: getEl('buildHeatmap')?.checked || false, downloadMedia: getEl('downloadMedia')?.checked || false,
             exportMode: getEl('exportMode')?.value || 'all', aiKeys: smartKeys.map(k => k.val).filter(Boolean).join(',')
         };
+
+        // Запомнить форму, чтобы вернуть её при возврате на страницу
+        saveCacheData('form', {
+            keywords: params.keywords, limit: limValue, exportMode: params.exportMode,
+            dateFromRaw: df || '', dateToRaw: dt || '',
+            buildGraph: params.buildGraph, buildDossier: params.buildDossier,
+            buildHeatmap: params.buildHeatmap, downloadMedia: params.downloadMedia
+        });
 
         await apiCall('/api/tg/export/start', 'POST', params);
         connectStream();
