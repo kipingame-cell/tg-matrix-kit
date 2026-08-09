@@ -146,7 +146,9 @@ function connectStream() {
 }
 
 window.initControl = async () => {
-    getEl('auth_frame')?.classList.add('hidden'); getEl('control_frame')?.classList.remove('hidden'); loadKeys();
+    getEl('web_login_frame')?.classList.add('hidden');
+    getEl('auth_frame')?.classList.add('hidden');
+    getEl('control_frame')?.classList.remove('hidden'); loadKeys();
 
     if (getEl('btn_toggle_keys_panel')) getEl('btn_toggle_keys_panel').onclick = () => getEl('keys_panel').classList.toggle('hidden');
     if (getEl('btn_add_dynamic_key')) getEl('btn_add_dynamic_key').onclick = () => { smartKeys.push({type:'gemini', val:''}); renderKeys(); saveKeys(); };
@@ -247,3 +249,12 @@ if (getEl('stop_btn')) {
         await apiCall('/api/tg/export/stop', 'POST', { sid });
     };
 }
+
+// --- АВТОВХОД: сессия уже есть на сервере → сразу в панель управления, без окон логина ---
+(async () => {
+    if (!sid) return;
+    const check = await apiCall(`/api/tg/check?sid=${sid}`);
+    if (check && check.active) {
+        window.initControl();
+    }
+})();
