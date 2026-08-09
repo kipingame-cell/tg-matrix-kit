@@ -1,7 +1,7 @@
 /**
  * TG Matrix Kit — авторизация и управление сессиями Telegram (GramJS).
- * Перенесено из site/matrix_v2 (packages/modules/telegram/src/tg_auth.js).
- * Изменения: Tor-прокси опционален (USE_TOR=1), добавлен роут /topics.
+ * Умное подключение: сначала напрямую (таймаут 25с), при сбое — через Tor (127.0.0.1:9050).
+ * Каждый шаг пишется в лог. Принудительно только Tor: FORCE_TOR=1. Отключить Tor-фолбэк: USE_TOR=0.
  */
 
 const express = require('express');
@@ -23,18 +23,52 @@ const ENCRYPTION_SALT = process.env.SESSION_SECRET || 'change-me-in-env';
 const APP_API_ID = Number(process.env.TELEGRAM_API_ID || 6);
 const APP_API_HASH = process.env.TELEGRAM_API_HASH || 'eb06d4abfb49dc3eeb1aeb98ae0f581e';
 
-// Tor опционален: локально обычно не нужен, в РФ может помочь обойти блокировку DC
-const USE_TOR = process.env.USE_TOR === '1';
-const TOR_PROXY = USE_TOR ? { ip: '127.0.0.1', port: 9050, socksType: 5, timeout: 30000 } : undefined;
+const TOR_PROXY = { ip: '127.0.0.1', port: 9050, socksType: 5, timeout: 60 };
+const CONNECT_TIMEOUT_MS = 25000;
 
-function clientOpts(extra = {}) {
-    return Object.assign({
+function clientOpts(useTor) {
+    return {
         connectionRetries: 5,
         requestRetries: 5,
-        timeout: 30000,
+        timeout: 30,
+        retryDelay: 1000,
         deviceModel: 'Samsung Galaxy S23 Ultra',
-        proxy: TOR_PROXY
-    }, extra);
+        proxy: useTor ? TOR_PROXY : undefined
+    };
+}
+
+function withTimeout(promise, ms, label) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Таймаут ${ms / 1000}с (${label})`)), ms))
+    ]);
+}
+
+/**
+ * Подключение с фолбэком: direct → tor (если USE_TOR не '0').
+ * FORCE_TOR=1 — сразу и только через Tor.
+ */
+async function connectSmart(sessionString) {
+    const modes = process.env.FORCE_TOR === '1'
+        ? ['tor']
+        : (process.env.USE_TOR === '0' ? ['direct'] : ['direct', 'tor']);
+
+    let lastErr = null;
+    for (const mode of modes) {
+        let client = null;
+        try {
+            console.log(`[NET] Подключение к Telegram... режим: ${mode.toUpperCase()}`);
+            client = new TelegramClient(new StringSession(sessionString || ''), APP_API_ID, APP_API_HASH, clientOpts(mode === 'tor'));
+            await withTimeout(client.connect(), CONNECT_TIMEOUT_MS, mode);
+            console.log(`[NET] Соединение установлено (${mode.toUpperCase()}).`);
+            return client;
+        } catch (e) {
+            lastErr = e;
+            console.error(`[NET] Режим ${mode.toUpperCase()} не сработал: ${e.message}`);
+            try { if (client) await client.destroy(); } catch (_) {}
+        }
+    }
+    throw lastErr || new Error('Не удалось подключиться ни одним способом');
 }
 
 function encryptSession(text, sid) {
@@ -78,9 +112,7 @@ async function getClient(sid) {
                 sessionString = decryptSession(sessionString, sid);
             }
 
-            const client = new TelegramClient(new StringSession(sessionString || ''), APP_API_ID, APP_API_HASH, clientOpts());
-
-            await client.connect();
+            const client = await connectSmart(sessionString || '');
             activeClients[sid].tgClient = client;
             return client;
         } catch (err) {
@@ -98,6 +130,7 @@ function saveSession(sid) {
     if (state?.tgClient?.session) {
         const raw = state.tgClient.session.save();
         fs.writeFileSync(path.join(SESSIONS_DIR, `${sid}.json`), JSON.stringify({ session: encryptSession(raw, sid) }));
+        console.log(`[AUTH] Сессия ${sid} сохранена (зашифрована).`);
     }
 }
 
@@ -110,9 +143,10 @@ router.get('/check', (req, res) => res.json({ active: fs.existsSync(path.join(SE
 router.post('/send-code', async (req, res) => {
     const { sid, phone } = req.body;
     try {
-        if (activeClients[sid]?.tgClient) await activeClients[sid].tgClient.disconnect();
-        const client = new TelegramClient(new StringSession(''), APP_API_ID, APP_API_HASH, clientOpts());
-        await client.connect();
+        console.log(`[AUTH] Запрос кода для ${phone} (sid=${sid})...`);
+        if (activeClients[sid]?.tgClient) { try { await activeClients[sid].tgClient.destroy(); } catch (_) {} }
+
+        const client = await connectSmart('');
 
         const state = { phone, tgClient: client };
         activeClients[sid] = state;
@@ -132,8 +166,12 @@ router.post('/send-code', async (req, res) => {
             state.authFlowPromise.then(() => reject(new Error('Уже авторизован'))).catch(reject);
         });
 
+        console.log('[AUTH] Код отправлен. Ждите код в приложении Telegram (не SMS).');
         res.json({ success: true });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) {
+        console.error('[AUTH] Ошибка отправки кода:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 router.post('/login', async (req, res) => {
@@ -141,6 +179,7 @@ router.post('/login', async (req, res) => {
     try {
         const state = activeClients[sid];
         if (!state) throw new Error('Контекст утерян. Запросите код заново.');
+        console.log(`[AUTH] Проверка кода (sid=${sid})...`);
         state.resolveCode(code);
 
         const result = await new Promise((resolve, reject) => {
@@ -149,9 +188,18 @@ router.post('/login', async (req, res) => {
             state.authFlowPromise.then(() => resolve('success')).catch(reject);
         });
 
-        if (result === 'password_needed') res.json({ success: false, requiresPassword: true });
-        else { saveSession(sid); res.json({ success: true }); }
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        if (result === 'password_needed') {
+            console.log('[AUTH] Требуется 2FA-пароль.');
+            res.json({ success: false, requiresPassword: true });
+        } else {
+            saveSession(sid);
+            console.log('[AUTH] Вход выполнен.');
+            res.json({ success: true });
+        }
+    } catch (err) {
+        console.error('[AUTH] Ошибка кода:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 router.post('/password', async (req, res) => {
@@ -161,8 +209,13 @@ router.post('/password', async (req, res) => {
         if (!state) throw new Error('Контекст утерян.');
         state.resolvePassword(password);
         await new Promise((resolve, reject) => { state.onError = reject; state.authFlowPromise.then(resolve).catch(reject); });
-        saveSession(sid); res.json({ success: true });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+        saveSession(sid);
+        console.log('[AUTH] Вход по 2FA выполнен.');
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[AUTH] Ошибка 2FA:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 router.get('/chats', async (req, res) => {
@@ -174,7 +227,7 @@ router.get('/chats', async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Список топиков форума (роут отсутствовал в исходнике — фронт звал его впустую)
+// Список топиков форума
 router.get('/topics', async (req, res) => {
     try {
         const client = await getClient(req.query.sid);
@@ -192,7 +245,6 @@ router.get('/topics', async (req, res) => {
             .map(t => ({ id: t.id, title: t.title }));
         res.json({ success: true, topics });
     } catch (err) {
-        // Не форум / нет прав — просто нет топиков, не ломаем фронт
         res.json({ success: true, topics: [] });
     }
 });
