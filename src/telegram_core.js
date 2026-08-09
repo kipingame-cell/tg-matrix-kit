@@ -1,7 +1,7 @@
 /**
  * TG Matrix Kit — ядро экспорта чатов (TXT/HTML/JSON + граф + радар + досье).
- * Перенесено из site/matrix_v2 (packages/modules/telegram/src/telegram_core.js).
- * Граф: узлы несут счётчик сообщений (data key="messages"), связи — ответы с весом.
+ * Граф: три типа связей — ОТВЕТЫ (reply), УПОМИНАНИЯ @username (mention), РЕАКЦИИ (reaction).
+ * Узлы несут счётчик сообщений (data key="messages").
  */
 
 const { Api } = require('telegram');
@@ -49,7 +49,15 @@ async function exportChatMessages(client, chatId, options, taskState, progressCa
 
     const users = new Map(), rawActivityLog = [], userQuotes = new Map(), rawMessages = [];
     const graphNodes = new Map(), graphLinks = new Map(), msgSenderMap = new Map();
-    const pendingLinks = [];
+    const senderIdMap = new Map(), usernameMap = new Map();
+    const pendingLinks = [], pendingMentions = [], pendingReactions = [];
+
+    const addGraphLink = (source, target, type) => {
+        if (source === target) return;
+        const key = `${source}->${target}->${type}`;
+        const prev = graphLinks.get(key);
+        graphLinks.set(key, { source, target, type, value: (prev?.value || 0) + 1 });
+    };
 
     const flushChunks = () => {
         if (txtChunk.length === 0) return;
@@ -107,7 +115,28 @@ async function exportChatMessages(client, chatId, options, taskState, progressCa
         msgSenderMap.set(msgIdStr, sender);
         graphNodes.set(sender, (graphNodes.get(sender) || 0) + 1);
 
+        if (message.senderId) senderIdMap.set(message.senderId.toString(), sender);
+        if (message.sender && message.sender.username) usernameMap.set(message.sender.username.toLowerCase(), sender);
+
         if (replyIdStr) pendingLinks.push({ source: sender, targetId: replyIdStr });
+
+        // УПОМИНАНИЯ @username
+        if (buildGraph && message.entities) {
+            for (const ent of message.entities) {
+                if (ent.className === 'MessageEntityMention' && typeof ent.offset === 'number' && ent.length) {
+                    const uname = text.substr(ent.offset, ent.length).replace('@', '').toLowerCase();
+                    if (uname) pendingMentions.push({ source: sender, uname });
+                }
+            }
+        }
+
+        // РЕАКЦИИ (best effort: только видимые recentReactions)
+        if (buildGraph && message.reactions && Array.isArray(message.reactions.recentReactions)) {
+            for (const r of message.reactions.recentReactions) {
+                const rid = r.peerId ? r.peerId.toString() : null;
+                if (rid) pendingReactions.push({ reactorId: rid, target: sender });
+            }
+        }
 
         if (text) {
             rawMessages.push({ id: msgIdStr, sender: sender, text: text, replyTo: replyIdStr });
@@ -142,14 +171,17 @@ async function exportChatMessages(client, chatId, options, taskState, progressCa
 
     flushChunks();
 
+    // Разрешение отложенных связей
     pendingLinks.forEach(link => {
-        if (msgSenderMap.has(link.targetId)) {
-            const target = msgSenderMap.get(link.targetId);
-            if (link.source !== target) {
-                const linkKey = `${link.source}->${target}`;
-                graphLinks.set(linkKey, { source: link.source, target: target, value: (graphLinks.get(linkKey)?.value || 0) + 1 });
-            }
-        }
+        if (msgSenderMap.has(link.targetId)) addGraphLink(link.source, msgSenderMap.get(link.targetId), 'reply');
+    });
+    pendingMentions.forEach(m => {
+        const target = usernameMap.get(m.uname);
+        if (target) addGraphLink(m.source, target, 'mention');
+    });
+    pendingReactions.forEach(r => {
+        const source = senderIdMap.get(r.reactorId);
+        if (source) addGraphLink(source, r.target, 'reaction');
     });
 
     const apiKey = options.aiKeys ? options.aiKeys.split(',')[0].trim() : null;
@@ -166,6 +198,7 @@ async function exportChatMessages(client, chatId, options, taskState, progressCa
     if (buildHeatmap) fs.writeFileSync(path.join(exportDir, 'latest_heatmap.json'), JSON.stringify(rawActivityLog));
 
     if (buildGraph) {
+        const typeNames = { reply: 'Ответы', mention: 'Упоминания', reaction: 'Реакции' };
         let graphml = `<?xml version="1.0" encoding="UTF-8"?>\n<graphml>\n  <graph id="G" edgedefault="directed">\n`;
         Array.from(graphNodes.entries()).forEach(([id, weight]) => {
             const safeId = esc(id);
@@ -173,7 +206,7 @@ async function exportChatMessages(client, chatId, options, taskState, progressCa
         });
         Array.from(graphLinks.values()).forEach(link => {
             const s = esc(link.source), t = esc(link.target);
-            graphml += `    <edge source="${s}" target="${t}"><data key="weight">${link.value}</data><data key="label">Ответы</data></edge>\n`;
+            graphml += `    <edge source="${s}" target="${t}"><data key="weight">${link.value}</data><data key="type">${link.type}</data><data key="label">${typeNames[link.type] || 'Связь'}</data></edge>\n`;
         });
         graphml += `  </graph>\n</graphml>`;
 
@@ -187,6 +220,7 @@ async function exportChatMessages(client, chatId, options, taskState, progressCa
 
     return {
         zip: archiveName,
+        exportedCount: count,
         graph: buildGraph ? `/api/tg/download-extra?file=latest_graph.xml` : null,
         dossier: buildDossier ? `/api/tg/download-extra?file=latest_dossier.html` : null,
         heatmap: buildHeatmap ? `/api/tg/download-extra?file=latest_heatmap.json` : null
