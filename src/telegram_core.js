@@ -1,6 +1,7 @@
 /**
  * TG Matrix Kit — ядро экспорта чатов (TXT/HTML/JSON + граф + радар + досье).
- * Перенесено из site/matrix_v2 (packages/modules/telegram/src/telegram_core.js) без изменений логики.
+ * Перенесено из site/matrix_v2 (packages/modules/telegram/src/telegram_core.js).
+ * Граф: узлы несут счётчик сообщений (data key="messages"), связи — ответы с весом.
  */
 
 const { Api } = require('telegram');
@@ -168,11 +169,11 @@ async function exportChatMessages(client, chatId, options, taskState, progressCa
         let graphml = `<?xml version="1.0" encoding="UTF-8"?>\n<graphml>\n  <graph id="G" edgedefault="directed">\n`;
         Array.from(graphNodes.entries()).forEach(([id, weight]) => {
             const safeId = esc(id);
-            graphml += `    <node id="${safeId}"><data key="name">${safeId}</data></node>\n`;
+            graphml += `    <node id="${safeId}"><data key="name">${safeId}</data><data key="messages">${weight}</data></node>\n`;
         });
         Array.from(graphLinks.values()).forEach(link => {
             const s = esc(link.source), t = esc(link.target);
-            graphml += `    <edge source="${s}" target="${t}"><data key="weight">${link.value}</data><data key="label">Общение</data></edge>\n`;
+            graphml += `    <edge source="${s}" target="${t}"><data key="weight">${link.value}</data><data key="label">Ответы</data></edge>\n`;
         });
         graphml += `  </graph>\n</graphml>`;
 
