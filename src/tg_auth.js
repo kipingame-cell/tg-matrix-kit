@@ -1,7 +1,9 @@
 /**
- * TG Matrix Kit — авторизация и управление сессиями Telegram (GramJS).
- * Умное подключение: сначала напрямую (таймаут 25с), при сбое — через Tor (127.0.0.1:9050).
- * Каждый шаг пишется в лог. Принудительно только Tor: FORCE_TOR=1. Отключить Tor-фолбэк: USE_TOR=0.
+ * TG Matrix Kit — авторизация Telegram (GramJS), ручной поток sendCode/signIn.
+ * Маскировка устройства: Samsung Galaxy S23 Ultra (SM-S918B), Android 14, официальный клиент.
+ * Доставка кода логируется: тип виден в ответе API и в логе (APP / SMS / CALL / FLASH_CALL).
+ * Повторная отправка кода: POST /resend-code (переключает канал: приложение → SMS → звонок).
+ * Подключение: direct → Tor фолбэк (USE_TOR=0 отключает, FORCE_TOR=1 — только Tor).
  */
 
 const express = require('express');
@@ -10,6 +12,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
+const { computeCheck } = require('telegram/Password');
 const router = express.Router();
 
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -23,16 +26,27 @@ const ENCRYPTION_SALT = process.env.SESSION_SECRET || 'change-me-in-env';
 const APP_API_ID = Number(process.env.TELEGRAM_API_ID || 6);
 const APP_API_HASH = process.env.TELEGRAM_API_HASH || 'eb06d4abfb49dc3eeb1aeb98ae0f581e';
 
+// --- МАСКИРОВКА: Samsung Galaxy S23 Ultra, Android 14, Telegram Android 10.14.5 ---
+const DEVICE_FINGERPRINT = {
+    deviceModel: 'Samsung SM-S918B',
+    systemVersion: 'SDK 34',
+    appVersion: '10.14.5 (49922)',
+    langCode: 'ru',
+    systemLangCode: 'ru-RU',
+    langPack: 'android',
+    useIPv6: false
+};
+
 const TOR_PROXY = { ip: '127.0.0.1', port: 9050, socksType: 5, timeout: 60 };
 const CONNECT_TIMEOUT_MS = 25000;
 
 function clientOpts(useTor) {
     return {
+        ...DEVICE_FINGERPRINT,
         connectionRetries: 5,
         requestRetries: 5,
         timeout: 30,
         retryDelay: 1000,
-        deviceModel: 'Samsung Galaxy S23 Ultra',
         proxy: useTor ? TOR_PROXY : undefined
     };
 }
@@ -44,10 +58,6 @@ function withTimeout(promise, ms, label) {
     ]);
 }
 
-/**
- * Подключение с фолбэком: direct → tor (если USE_TOR не '0').
- * FORCE_TOR=1 — сразу и только через Tor.
- */
 async function connectSmart(sessionString) {
     const modes = process.env.FORCE_TOR === '1'
         ? ['tor']
@@ -138,8 +148,23 @@ function toEntityId(id) {
     return String(id).startsWith('-100') ? BigInt(id) : id;
 }
 
+function fmtErr(err) {
+    if (err && err.errorMessage) {
+        if (err.errorMessage.startsWith('FLOOD_WAIT')) {
+            return `Telegram временно ограничил запросы. Подождите ${err.errorMessage.replace('FLOOD_WAIT_', '')} сек. и повторите.`;
+        }
+        if (err.errorMessage === 'PHONE_NUMBER_INVALID') return 'Номер не зарегистрирован в Telegram или введён с ошибкой.';
+        if (err.errorMessage === 'PHONE_CODE_INVALID') return 'Неверный код. Проверьте и введите снова.';
+        if (err.errorMessage === 'PHONE_CODE_EXPIRED') return 'Код истёк. Запросите новый (кнопка повторной отправки).';
+        if (err.errorMessage === 'PASSWORD_HASH_INVALID') return 'Неверный пароль 2FA.';
+        return `Telegram: ${err.errorMessage}`;
+    }
+    return err.message || String(err);
+}
+
 router.get('/check', (req, res) => res.json({ active: fs.existsSync(path.join(SESSIONS_DIR, `${req.query.sid}.json`)) }));
 
+// --- ОТПРАВКА КОДА (ручной sendCode: видим тип доставки) ---
 router.post('/send-code', async (req, res) => {
     const { sid, phone } = req.body;
     try {
@@ -148,73 +173,106 @@ router.post('/send-code', async (req, res) => {
 
         const client = await connectSmart('');
 
-        const state = { phone, tgClient: client };
-        activeClients[sid] = state;
-
-        state.codePromise = new Promise((resolve, reject) => { state.resolveCode = resolve; state.rejectCode = reject; });
-        state.passwordPromise = new Promise((resolve, reject) => { state.resolvePassword = resolve; state.rejectPassword = reject; });
-
-        state.authFlowPromise = client.start({
+        const sent = await client.invoke(new Api.auth.SendCode({
             phoneNumber: phone,
-            phoneCode: async () => { if (state.onCodeRequested) state.onCodeRequested(); return await state.codePromise; },
-            password: async () => { if (state.onPasswordRequested) state.onPasswordRequested(); return await state.passwordPromise; },
-            onError: (err) => { if (state.onError) state.onError(err); return true; }
-        });
+            apiId: APP_API_ID,
+            apiHash: APP_API_HASH,
+            settings: new Api.CodeSettings({
+                allowFlashcall: true,
+                currentNumber: true,
+                allowAppHash: true,
+                allowMissedCall: true
+            })
+        }));
 
-        await new Promise((resolve, reject) => {
-            state.onCodeRequested = resolve; state.onError = reject;
-            state.authFlowPromise.then(() => reject(new Error('Уже авторизован'))).catch(reject);
-        });
+        const deliveryType = sent.type ? sent.type.className : 'Unknown';
+        activeClients[sid] = { tgClient: client, phone, phoneCodeHash: sent.phoneCodeHash, deliveryType };
 
-        console.log('[AUTH] Код отправлен. Ждите код в приложении Telegram (не SMS).');
-        res.json({ success: true });
+        const humanType = {
+            SentCodeTypeApp: 'В ПРИЛОЖЕНИИ TELEGRAM (служебный чат)',
+            SentCodeTypeSms: 'SMS',
+            SentCodeTypeCall: 'ЗВОНОК',
+            SentCodeTypeFlashCall: 'ФЛЭШ-ЗВОНОК',
+            SentCodeTypeMissedCall: 'ПРОПУЩЕННЫЙ ЗВОНОК',
+            SentCodeTypeFragmentSms: 'SMS (FRAGMENT)'
+        }[deliveryType] || deliveryType;
+
+        console.log(`[AUTH] Код отправлен. Канал доставки: ${humanType}`);
+        res.json({ success: true, deliveryType: humanType });
     } catch (err) {
-        console.error('[AUTH] Ошибка отправки кода:', err.message);
-        res.status(500).json({ success: false, error: err.message });
+        console.error('[AUTH] Ошибка отправки кода:', fmtErr(err));
+        res.status(500).json({ success: false, error: fmtErr(err) });
     }
 });
 
+// --- ПОВТОРНАЯ ОТПРАВКА (переключает канал: приложение → SMS → звонок) ---
+router.post('/resend-code', async (req, res) => {
+    const { sid } = req.body;
+    try {
+        const state = activeClients[sid];
+        if (!state || !state.phoneCodeHash) throw new Error('Сначала запросите код (введите номер).');
+
+        console.log(`[AUTH] Повторный запрос кода для ${state.phone}...`);
+        const sent = await state.tgClient.invoke(new Api.auth.ResendCode({
+            phoneNumber: state.phone,
+            phoneCodeHash: state.phoneCodeHash
+        }));
+
+        state.phoneCodeHash = sent.phoneCodeHash;
+        const deliveryType = sent.type ? sent.type.className : 'Unknown';
+        console.log(`[AUTH] Код переотправлен. Канал: ${deliveryType}`);
+        res.json({ success: true, deliveryType });
+    } catch (err) {
+        console.error('[AUTH] Ошибка повторной отправки:', fmtErr(err));
+        res.status(500).json({ success: false, error: fmtErr(err) });
+    }
+});
+
+// --- ВХОД ПО КОДУ ---
 router.post('/login', async (req, res) => {
     const { sid, code } = req.body;
     try {
         const state = activeClients[sid];
-        if (!state) throw new Error('Контекст утерян. Запросите код заново.');
+        if (!state || !state.phoneCodeHash) throw new Error('Контекст утерян. Запросите код заново.');
         console.log(`[AUTH] Проверка кода (sid=${sid})...`);
-        state.resolveCode(code);
 
-        const result = await new Promise((resolve, reject) => {
-            state.onPasswordRequested = () => resolve('password_needed');
-            state.onError = reject;
-            state.authFlowPromise.then(() => resolve('success')).catch(reject);
-        });
+        await state.tgClient.invoke(new Api.auth.SignIn({
+            phoneNumber: state.phone,
+            phoneCodeHash: state.phoneCodeHash,
+            phoneCode: String(code).trim()
+        }));
 
-        if (result === 'password_needed') {
-            console.log('[AUTH] Требуется 2FA-пароль.');
-            res.json({ success: false, requiresPassword: true });
-        } else {
-            saveSession(sid);
-            console.log('[AUTH] Вход выполнен.');
-            res.json({ success: true });
-        }
+        saveSession(sid);
+        console.log('[AUTH] Вход выполнен.');
+        res.json({ success: true });
     } catch (err) {
-        console.error('[AUTH] Ошибка кода:', err.message);
-        res.status(500).json({ success: false, error: err.message });
+        if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
+            console.log('[AUTH] Требуется 2FA-пароль.');
+            return res.json({ success: false, requiresPassword: true });
+        }
+        console.error('[AUTH] Ошибка кода:', fmtErr(err));
+        res.status(500).json({ success: false, error: fmtErr(err) });
     }
 });
 
+// --- ВХОД ПО 2FA-ПАРОЛЮ (SRP) ---
 router.post('/password', async (req, res) => {
     const { sid, password } = req.body;
     try {
         const state = activeClients[sid];
-        if (!state) throw new Error('Контекст утерян.');
-        state.resolvePassword(password);
-        await new Promise((resolve, reject) => { state.onError = reject; state.authFlowPromise.then(resolve).catch(reject); });
+        if (!state) throw new Error('Контекст утерян. Запросите код заново.');
+        console.log(`[AUTH] Проверка 2FA (sid=${sid})...`);
+
+        const pwdSrp = await state.tgClient.invoke(new Api.account.GetPassword());
+        const check = await computeCheck(pwdSrp, password);
+        await state.tgClient.invoke(new Api.auth.CheckPassword({ password: check }));
+
         saveSession(sid);
         console.log('[AUTH] Вход по 2FA выполнен.');
         res.json({ success: true });
     } catch (err) {
-        console.error('[AUTH] Ошибка 2FA:', err.message);
-        res.status(500).json({ success: false, error: err.message });
+        console.error('[AUTH] Ошибка 2FA:', fmtErr(err));
+        res.status(500).json({ success: false, error: fmtErr(err) });
     }
 });
 
@@ -224,7 +282,7 @@ router.get('/chats', async (req, res) => {
         if (!client) return res.status(401).json({ success: false });
         const dialogs = await client.getDialogs({});
         res.json({ success: true, chats: dialogs.map(d => ({ id: d.id.toString(), name: d.title || d.name || 'Unknown' })) });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { res.status(500).json({ success: false, error: fmtErr(err) }); }
 });
 
 // Список топиков форума
@@ -256,7 +314,7 @@ router.get('/participants', async (req, res) => {
         let p = [];
         for await (const u of client.iterParticipants(entity, { limit: 500 })) { p.push(u); }
         res.json({ success: true, users: p.map(u => ({ id: u.id.toString(), name: u.firstName || u.username })) });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    } catch (err) { res.status(500).json({ success: false, error: fmtErr(err) }); }
 });
 
 // --- ФОНОВЫЕ РОУТЫ ЭКСПОРТА --- //
@@ -303,7 +361,7 @@ router.post('/export/start', async (req, res) => {
         broadcast({ type: 'done' });
     }).catch(err => {
         task.status = 'error';
-        broadcast({ type: 'error', msg: err.message });
+        broadcast({ type: 'error', msg: fmtErr(err) });
     });
 
     res.json({ success: true });

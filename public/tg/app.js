@@ -37,6 +37,33 @@ window.saveKeys = () => {
 };
 window.removeKey = (i) => { smartKeys.splice(i, 1); renderKeys(); saveKeys(); };
 
+// Динамическая кнопка повторной отправки кода (не требует правки HTML)
+function showResendButton() {
+    const codeBlock = getEl('code_block');
+    if (!codeBlock) return;
+    let rb = getEl('resend_code_btn');
+    if (!rb) {
+        rb = document.createElement('button');
+        rb.id = 'resend_code_btn';
+        rb.innerText = 'КОД НЕ ПРИШЁЛ? ВЫСЛАТЬ ПО SMS/ЗВОНКОМ';
+        rb.style.cssText = 'margin-top:8px; width:100%; padding:8px; background:transparent; border:1px dashed #cc0000; color:#cc0000; font-size:10px; cursor:pointer; letter-spacing:1px;';
+        rb.onclick = async (e) => {
+            e.preventDefault();
+            rb.disabled = true; rb.innerText = 'ПЕРЕОТПРАВКА...';
+            const res = await apiCall('/api/tg/resend-code', 'POST', { sid });
+            rb.disabled = false;
+            if (res && res.success) {
+                rb.innerText = 'ОТПРАВЛЕНО: ' + (res.deliveryType || 'ПОВТОР');
+            } else {
+                rb.innerText = 'СБОЙ: ' + ((res && res.error) || 'ПОПРОБУЙТЕ ПОЗЖЕ');
+            }
+            setTimeout(() => { rb.innerText = 'КОД НЕ ПРИШЁЛ? ВЫСЛАТЬ ПО SMS/ЗВОНКОМ'; }, 5000);
+        };
+        codeBlock.appendChild(rb);
+    }
+    rb.classList.remove('hidden');
+}
+
 if (getEl('btn_web_login')) {
     getEl('btn_web_login').onclick = async () => {
         const user = getEl('web_user').value.trim(), pass = getEl('web_pass').value.trim();
@@ -59,7 +86,8 @@ if (getEl('connect_btn')) {
                 btn.innerText = "ПРОВЕРКА 2FA..."; btn.style.opacity = '0.5'; btn.disabled = true;
                 const res = await apiCall('/api/tg/password', 'POST', { sid, password: pwd });
                 btn.style.opacity = '1'; btn.disabled = false; btn.innerText = "УСТАНОВИТЬ СВЯЗЬ";
-                if (res && res.success) { alert("СВЯЗЬ УСТАНОВЛЕНА!"); window.initControl(); } else alert("ОШИБКА 2FA ПАРОЛЯ");
+                if (res && res.success) { alert("СВЯЗЬ УСТАНОВЛЕНА!"); window.initControl(); }
+                else alert("ОШИБКА 2FA: " + ((res && res.error) || 'НЕВЕРНЫЙ ПАРОЛЬ'));
                 return;
             }
             if (code) {
@@ -67,15 +95,21 @@ if (getEl('connect_btn')) {
                 const res = await apiCall('/api/tg/login', 'POST', { sid, code: code });
                 btn.style.opacity = '1'; btn.disabled = false; btn.innerText = "ОТПРАВИТЬ КОД";
                 if (res && res.requiresPassword) { getEl('code_block').classList.add('hidden'); getEl('password_block').classList.remove('hidden'); btn.innerText = "ОТПРАВИТЬ ПАРОЛЬ"; }
-                else if (res && res.success) { alert("СВЯЗЬ УСТАНОВЛЕНА!"); window.initControl(); } else alert("ОШИБКА КОДА.");
+                else if (res && res.success) { alert("СВЯЗЬ УСТАНОВЛЕНА!"); window.initControl(); }
+                else alert("ОШИБКА КОДА: " + ((res && res.error) || 'НЕВЕРНЫЙ КОД'));
                 return;
             }
             if (phone) {
                 btn.innerText = "ПОДКЛЮЧЕНИЕ... (ЖДИТЕ ДО 60 СЕК)"; btn.style.opacity = '0.5'; btn.disabled = true;
                 const res = await apiCall('/api/tg/send-code', 'POST', { sid, phone });
                 btn.style.opacity = '1'; btn.disabled = false;
-                if (res && res.success) { getEl('code_block').classList.remove('hidden'); btn.innerText = "ОТПРАВИТЬ КОД"; }
-                else { alert("СБОЙ. СЕРВЕР ОТКЛОНИЛ ЗАПРОС."); btn.innerText = "УСТАНОВИТЬ СВЯЗЬ"; }
+                if (res && res.success) {
+                    getEl('code_block').classList.remove('hidden');
+                    btn.innerText = "ОТПРАВИТЬ КОД";
+                    showResendButton();
+                    alert("КОД ОТПРАВЛЕН. КАНАЛ: " + (res.deliveryType || 'TELEGRAM'));
+                }
+                else { alert("СБОЙ: " + ((res && res.error) || 'СЕРВЕР ОТКЛОНИЛ ЗАПРОС')); btn.innerText = "УСТАНОВИТЬ СВЯЗЬ"; }
             }
         } catch(e) { alert("СИСТЕМНАЯ ОШИБКА."); btn.style.opacity = '1'; btn.disabled = false; btn.innerText = "УСТАНОВИТЬ СВЯЗЬ"; }
     };
