@@ -1,0 +1,11 @@
+node_modules
+.env
+tg_sessions
+exports
+*.session
+tg_backup
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md
