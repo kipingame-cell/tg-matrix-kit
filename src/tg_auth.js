@@ -1,6 +1,6 @@
 /**
  * TG Matrix Kit — авторизация Telegram (GramJS), ручной поток sendCode/signIn.
- * Маскировка устройства: Samsung Galaxy S23 Ultra (SM-S918B), Android 14, официальный клиент.
+ * Маскировка: Samsung Galaxy S23 Ultra / Android 13.0 / Telegram 9.6.5 — отпечаток реального клиента.
  * Доставка кода логируется: тип виден в ответе API и в логе (APP / SMS / CALL / FLASH_CALL).
  * Повторная отправка кода: POST /resend-code (переключает канал: приложение → SMS → звонок).
  * Подключение: direct → Tor фолбэк (USE_TOR=0 отключает, FORCE_TOR=1 — только Tor).
@@ -26,15 +26,13 @@ const ENCRYPTION_SALT = process.env.SESSION_SECRET || 'change-me-in-env';
 const APP_API_ID = Number(process.env.TELEGRAM_API_ID || 6);
 const APP_API_HASH = process.env.TELEGRAM_API_HASH || 'eb06d4abfb49dc3eeb1aeb98ae0f581e';
 
-// --- МАСКИРОВКА: Samsung Galaxy S23 Ultra, Android 14, Telegram Android 10.14.5 ---
+// --- МАСКИРОВКА: точный отпечаток Samsung Galaxy S23 Ultra, Android 13.0, Telegram 9.6.5 ---
 const DEVICE_FINGERPRINT = {
-    deviceModel: 'Samsung SM-S918B',
-    systemVersion: 'SDK 34',
-    appVersion: '10.14.5 (49922)',
+    deviceModel: 'Samsung Galaxy S23 Ultra',
+    systemVersion: 'Android 13.0',
+    appVersion: '9.6.5',
     langCode: 'ru',
-    systemLangCode: 'ru-RU',
-    langPack: 'android',
-    useIPv6: false
+    systemLangCode: 'ru-RU'
 };
 
 const TOR_PROXY = { ip: '127.0.0.1', port: 9050, socksType: 5, timeout: 60 };
@@ -177,28 +175,14 @@ router.post('/send-code', async (req, res) => {
             phoneNumber: phone,
             apiId: APP_API_ID,
             apiHash: APP_API_HASH,
-            settings: new Api.CodeSettings({
-                allowFlashcall: true,
-                currentNumber: true,
-                allowAppHash: true,
-                allowMissedCall: true
-            })
+            settings: new Api.CodeSettings()
         }));
 
         const deliveryType = sent.type ? sent.type.className : 'Unknown';
         activeClients[sid] = { tgClient: client, phone, phoneCodeHash: sent.phoneCodeHash, deliveryType };
 
-        const humanType = {
-            SentCodeTypeApp: 'В ПРИЛОЖЕНИИ TELEGRAM (служебный чат)',
-            SentCodeTypeSms: 'SMS',
-            SentCodeTypeCall: 'ЗВОНОК',
-            SentCodeTypeFlashCall: 'ФЛЭШ-ЗВОНОК',
-            SentCodeTypeMissedCall: 'ПРОПУЩЕННЫЙ ЗВОНОК',
-            SentCodeTypeFragmentSms: 'SMS (FRAGMENT)'
-        }[deliveryType] || deliveryType;
-
-        console.log(`[AUTH] Код отправлен. Канал доставки: ${humanType}`);
-        res.json({ success: true, deliveryType: humanType });
+        console.log(`[AUTH] Код отправлен. Канал доставки: ${deliveryType}`);
+        res.json({ success: true, deliveryType });
     } catch (err) {
         console.error('[AUTH] Ошибка отправки кода:', fmtErr(err));
         res.status(500).json({ success: false, error: fmtErr(err) });
