@@ -34,6 +34,7 @@ app.get('/', (req, res) => res.redirect('/tg/'));
     if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 });
 
-const server = app.listen(PORT, () => console.log(`[TG MATRIX KIT] Терминал активен: http://localhost:${PORT}/tg/`));
+const HOST = process.env.HOST || '127.0.0.1';
+const server = app.listen(PORT, HOST, () => console.log(`[TG MATRIX KIT] Терминал активен: http://localhost:${PORT}/tg/`));
 server.timeout = 600000;
 server.keepAliveTimeout = 600000;
