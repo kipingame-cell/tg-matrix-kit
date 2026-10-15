@@ -1,0 +1,52 @@
+{
+  "repo": "tg-matrix-kit",
+  "source_commit": "2c52ae79de3405f8502b3f97bd23eb5e0962ace2",
+  "source_tree": "de4890117cfc04bf8750f8b7b55880161d6e6787",
+  "date": "2026-10-15",
+  "structure": {
+    "repo": "tg-matrix-kit",
+    "blobs": 28,
+    "bytes": 252704,
+    "workflow_files": [
+      ".github/workflows/project-checks.yml"
+    ],
+    "lockfiles": [],
+    "licenses": [],
+    "readme_broken_links": []
+  },
+  "releases_first_10": [],
+  "runs_latest_5": [
+    {
+      "id": 37753657743,
+      "name": "Source checks",
+      "head_sha": "057f393f1ad81b4985ec00c72fc80692fbd1942e",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 37691382615,
+      "name": "Source checks",
+      "head_sha": "3822b5d9f77a5d48de66364f623dad59b54d9dd2",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ],
+  "apk": {
+    "repo": "tg-matrix-kit",
+    "status": "no published release in first 10"
+  },
+  "findings": [
+    {
+      "id": "TGKIT-R2-01",
+      "priority": "P2",
+      "title": "Пользовательский sid выходит за каталог сессий",
+      "file": "src/tg_auth.js",
+      "line": 112,
+      "proof": "Изолированный запуск исходного tg_auth.js, Telegram замокан. sid=../sentinel записал фиктивную зашифрованную сессию в sentinel.json рядом с tg_sessions; /check подтвердил существование. Реальные сессии и сеть не использовались.",
+      "impact": "sid берётся из запроса без проверки пути. При достижимом API и авторизации собственной Telegram-сессии возможно создание/перезапись JSON вне каталога. По умолчанию сервер слушает 127.0.0.1, поэтому это не доказательство удалённой атаки из Интернета.",
+      "fix": "Генерировать криптографически случайный sid сервером; проверять формат и resolved containment до чтения/записи, привязать экспорт к владельцу.",
+      "acceptance": "../, абсолютные пути, разделители и специальные имена отвергаются до работы с диском; только серверный sid даёт доступ к своей сессии."
+    }
+  ],
+  "reproductions": []
+}

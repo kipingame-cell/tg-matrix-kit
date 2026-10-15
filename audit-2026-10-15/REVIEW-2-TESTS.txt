@@ -1,0 +1,6 @@
+FILE: tg-router-probe.log
+{"repo":"tg-matrix-kit","sid":"../sentinel","writtenOutsideSessions":true,"existenceOracle":{"active":true},"networkConnections":0,"secretsUsed":false}
+
+
+PORTABLE PROBE: node audit-2026-10-15/PROBE-R2.cjs
+{"repo":"tg-matrix-kit","sid":"../sentinel","writtenOutsideSessions":true,"existenceOracle":{"active":true},"networkConnections":0,"secretsUsed":false}
