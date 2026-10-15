@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-15",
+  "repo": "tg-matrix-kit",
+  "snapshot_ref": "057f393f1ad81b4985ec00c72fc80692fbd1942e",
+  "branch": "main",
+  "files_in_tree": 26,
+  "fetched_files": [
+    ".github/workflows/project-checks.yml",
+    "README.md",
+    "package.json",
+    "public/graph/index.html",
+    "public/heatmap/app.js",
+    "public/heatmap/index.html",
+    "public/tg/app.js",
+    "public/tg/index.html",
+    "server.js",
+    "src/ai_engine.js",
+    "src/bot_notify.js",
+    "src/telegram_core.js",
+    "src/tg_auth.js",
+    "src/tg_export.js"
+  ],
+  "findings": 2,
+  "apk_runtime_tested": false,
+  "full_history_audited": false,
+  "releases_sample": []
+}
