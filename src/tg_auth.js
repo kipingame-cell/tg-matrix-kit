@@ -20,8 +20,21 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'tg_sessions');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
-const activeClients = {};
-const backgroundTasks = {};
+const activeClients = Object.create(null);
+const backgroundTasks = Object.create(null);
+
+// Session identifiers are file names, never paths. Legacy session_ IDs remain valid.
+function sessionPath(sid) {
+    if (typeof sid !== 'string' || !/^session_[A-Za-z0-9_+\-]{1,200}$/.test(sid)) throw new Error('Некорректный идентификатор сессии');
+    const target = path.resolve(SESSIONS_DIR, `${sid}.json`);
+    if (path.dirname(target) !== path.resolve(SESSIONS_DIR)) throw new Error('Недопустимый путь сессии');
+    return target;
+}
+function validateRequestSid(req, res, next) {
+    try { sessionPath(req.method === 'GET' ? req.query?.sid : req.body?.sid); }
+    catch (_) { return res.status(400).json({ success: false, error: 'Некорректный идентификатор сессии' }); }
+    next();
+}
 
 const ENCRYPTION_SALT = process.env.SESSION_SECRET || 'change-me-in-env';
 const APP_API_ID = Number(process.env.TELEGRAM_API_ID || 6);
@@ -102,19 +115,19 @@ function decryptSession(encryptedText, sid) {
 }
 
 async function getClient(sid) {
-    if (!sid) return null;
+    try { sessionPath(sid); } catch (_) { return null; }
     if (activeClients[sid]?.tgClient?.connected) return activeClients[sid].tgClient;
     if (activeClients[sid]?.connectionPromise) return activeClients[sid].connectionPromise;
 
     if (!activeClients[sid]) activeClients[sid] = {};
 
     activeClients[sid].connectionPromise = (async () => {
-        const sessionPath = path.join(SESSIONS_DIR, `${sid}.json`);
-        if (!fs.existsSync(sessionPath)) return null;
+        const filePath = sessionPath(sid);
+        if (!fs.existsSync(filePath)) return null;
 
         try {
             console.log(`[AUTH] Восстановление сессии ${sid}...`);
-            const data = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+            const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
             let sessionString = data.session;
 
             if (sessionString && sessionString.includes(':')) {
@@ -135,10 +148,11 @@ async function getClient(sid) {
 }
 
 function saveSession(sid) {
+    const filePath = sessionPath(sid);
     const state = activeClients[sid];
     if (state?.tgClient?.session) {
         const raw = state.tgClient.session.save();
-        fs.writeFileSync(path.join(SESSIONS_DIR, `${sid}.json`), JSON.stringify({ session: encryptSession(raw, sid) }));
+        fs.writeFileSync(filePath, JSON.stringify({ session: encryptSession(raw, sid) }));
         console.log(`[AUTH] Сессия ${sid} сохранена (зашифрована).`);
     }
 }
@@ -161,10 +175,10 @@ function fmtErr(err) {
     return err.message || String(err);
 }
 
-router.get('/check', (req, res) => res.json({ active: fs.existsSync(path.join(SESSIONS_DIR, `${req.query.sid}.json`)) }));
+router.get('/check', validateRequestSid, (req, res) => res.json({ active: fs.existsSync(sessionPath(req.query.sid)) }));
 
 // --- ОТПРАВКА КОДА (ручной sendCode: видим тип доставки) ---
-router.post('/send-code', async (req, res) => {
+router.post('/send-code', validateRequestSid, async (req, res) => {
     const { sid, phone } = req.body;
     try {
         console.log(`[AUTH] Запрос кода для ${phone} (sid=${sid})...`);
@@ -191,7 +205,7 @@ router.post('/send-code', async (req, res) => {
 });
 
 // --- ПОВТОРНАЯ ОТПРАВКА (переключает канал: приложение → SMS → звонок) ---
-router.post('/resend-code', async (req, res) => {
+router.post('/resend-code', validateRequestSid, async (req, res) => {
     const { sid } = req.body;
     try {
         const state = activeClients[sid];
@@ -214,7 +228,7 @@ router.post('/resend-code', async (req, res) => {
 });
 
 // --- ВХОД ПО КОДУ ---
-router.post('/login', async (req, res) => {
+router.post('/login', validateRequestSid, async (req, res) => {
     const { sid, code } = req.body;
     try {
         const state = activeClients[sid];
@@ -241,7 +255,7 @@ router.post('/login', async (req, res) => {
 });
 
 // --- ВХОД ПО 2FA-ПАРОЛЮ (SRP) ---
-router.post('/password', async (req, res) => {
+router.post('/password', validateRequestSid, async (req, res) => {
     const { sid, password } = req.body;
     try {
         const state = activeClients[sid];
@@ -261,7 +275,7 @@ router.post('/password', async (req, res) => {
     }
 });
 
-router.get('/chats', async (req, res) => {
+router.get('/chats', validateRequestSid, async (req, res) => {
     try {
         const client = await getClient(req.query.sid);
         if (!client) return res.status(401).json({ success: false });
@@ -271,7 +285,7 @@ router.get('/chats', async (req, res) => {
 });
 
 // Список топиков форума
-router.get('/topics', async (req, res) => {
+router.get('/topics', validateRequestSid, async (req, res) => {
     try {
         const client = await getClient(req.query.sid);
         if (!client) return res.status(401).json({ success: false });
@@ -292,7 +306,7 @@ router.get('/topics', async (req, res) => {
     }
 });
 
-router.get('/participants', async (req, res) => {
+router.get('/participants', validateRequestSid, async (req, res) => {
     try {
         const client = await getClient(req.query.sid);
         const entity = await client.getEntity(toEntityId(req.query.id));
@@ -303,7 +317,7 @@ router.get('/participants', async (req, res) => {
 });
 
 // --- ФОНОВЫЕ РОУТЫ ЭКСПОРТА --- //
-router.post('/export/start', async (req, res) => {
+router.post('/export/start', validateRequestSid, async (req, res) => {
     const sid = req.body.sid;
     if (backgroundTasks[sid] && backgroundTasks[sid].status === 'running') {
         return res.json({ success: true, message: 'Уже запущен' });
@@ -355,7 +369,7 @@ router.post('/export/start', async (req, res) => {
     res.json({ success: true });
 });
 
-router.get('/export/stream', (req, res) => {
+router.get('/export/stream', validateRequestSid, (req, res) => {
     const sid = req.query.sid;
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -384,14 +398,15 @@ router.get('/export/stream', (req, res) => {
     req.on('close', () => { task.clients = task.clients.filter(c => c !== res); });
 });
 
-router.get('/export/status', (req, res) => {
+router.get('/export/status', validateRequestSid, (req, res) => {
     const task = backgroundTasks[req.query.sid];
     res.json({ active: !!(task && task.status === 'running') });
 });
 
-router.post('/export/stop', (req, res) => {
+router.post('/export/stop', validateRequestSid, (req, res) => {
     if (backgroundTasks[req.body.sid]) backgroundTasks[req.body.sid].stop = true;
     res.json({ success: true });
 });
 
 module.exports = { router, getClient, sessions: activeClients };
+

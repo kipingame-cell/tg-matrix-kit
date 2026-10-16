@@ -1,0 +1,29 @@
+✔ reject invalid SID "../sentinel" (1.459306ms)
+✔ reject invalid SID "/tmp/sentinel" (0.112997ms)
+✔ reject invalid SID "session_../x" (0.093829ms)
+✔ reject invalid SID "session_a/b" (0.138245ms)
+✔ reject invalid SID "session_a\\b" (0.11526ms)
+✔ reject invalid SID "session_%2e%2e" (0.190442ms)
+✔ reject invalid SID "__proto__" (0.185845ms)
+✔ reject invalid SID "constructor" (0.214377ms)
+✔ reject invalid SID "" (0.113387ms)
+✔ reject invalid SID null (0.14154ms)
+✔ reject invalid SID [] (0.1895ms)
+✔ reject invalid SID {} (0.12881ms)
+✔ reject invalid SID "session_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" (0.112416ms)
+✔ accept legacy and UUID-style IDs inside the sessions directory (0.150222ms)
+✔ all registered auth routes validate SID before invoking handlers (0.321145ms)
+✔ real auth module refuses traversal without disk write or Telegram connection (47.167582ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 140.656599
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> tg-matrix-kit@1.0.0 check
+> node --check server.js && node --check src/tg_auth.js && node --check src/tg_export.js && node --check src/telegram_core.js && node --check src/ai_engine.js
+
